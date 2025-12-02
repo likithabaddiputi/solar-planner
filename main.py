@@ -1,4 +1,4 @@
-# solar_engine_pro.py  ← 422 FIXED + FAKE DATA MODE (Dec 2025 – WORKS OFFLINE)
+# solar_engine_pro.py  ← NO CLASSES • NASA POWER • FULLY FUNCTIONAL (Dec 2025)
 import pvlib
 import pandas as pd
 import numpy as np
@@ -11,164 +11,122 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Pre-loaded realistic monthly GHI data for major cities (kWh/m²/day) - from NASA/PVGIS averages
-FAKE_DATA = {
-    "mumbai": [5.8, 6.5, 6.8, 6.5, 6.2, 5.0, 4.8, 5.1, 5.5, 5.8, 5.6, 5.7],
-    "delhi": [4.2, 5.1, 5.8, 6.5, 6.8, 6.5, 6.2, 6.0, 5.8, 5.5, 4.8, 4.0],
-    "ahmedabad": [5.5, 6.2, 6.5, 6.8, 7.0, 6.5, 6.2, 6.0, 6.2, 6.5, 5.8, 5.5],
-    "jaipur": [5.2, 6.0, 6.5, 7.0, 7.2, 6.8, 6.5, 6.2, 6.0, 6.2, 5.5, 5.0],
-    "bengaluru": [5.5, 6.0, 6.2, 6.0, 5.8, 5.2, 5.0, 5.2, 5.5, 5.8, 5.5, 5.5],
-    "chennai": [5.8, 6.2, 6.5, 6.5, 6.2, 5.5, 5.2, 5.5, 5.8, 6.0, 5.8, 5.8],
-    "dubai": [5.0, 5.8, 6.5, 7.0, 7.2, 7.0, 6.8, 6.5, 6.2, 6.0, 5.5, 5.0],
-    "riyadh": [4.5, 5.5, 6.5, 7.2, 7.5, 7.2, 7.0, 6.8, 6.5, 6.2, 5.5, 4.8],
-    "berlin": [1.8, 2.5, 3.5, 4.5, 5.5, 5.8, 6.0, 5.5, 4.0, 2.8, 1.8, 1.5],
-    # Default for unknown cities (India avg)
-    "default": [5.0, 5.5, 5.8, 5.8, 5.5, 4.8, 4.5, 4.8, 5.2, 5.5, 5.2, 5.0]
-}
+# Create cache folder
+CACHE_DIR = ".cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-class SolarPlannerPro:
-    def __init__(self):
-        self.geocoder = Nominatim(user_agent="solar-pro-v7")
-        self.cache_dir = ".cache"
-        os.makedirs(self.cache_dir, exist_ok=True)
-        self.api_attempts = 0
-        self.max_attempts = 3
+geocoder = Nominatim(user_agent="solar-pro-simple")
 
-    def geocode(self, location):
-        loc = self.geocoder.geocode(location)
-        if not loc:
-            raise ValueError("Location not found! Try a bigger city name.")
-        return loc.latitude, loc.longitude, loc.address
+# ====================== GEOCODE ======================
+def geocode_location(location: str):
+    loc = geocoder.geocode(location)
+    if not loc:
+        raise ValueError("Location not found! Try a bigger city name.")
+    return loc.latitude, loc.longitude, loc.address
 
-    def get_city_key(self, location):
-        lower_loc = location.lower()
-        for city in FAKE_DATA.keys():
-            if city in lower_loc:
-                return city
-        return "default"
+# ====================== NASA POWER ======================
+def get_nasa_power_data(lat: float, lon: float):
+    cache_key = f"{lat:.4f}_{lon:.4f}"
+    cache_file = os.path.join(CACHE_DIR, f"nasa_{hashlib.md5(cache_key.encode()).hexdigest()}.json")
 
-    def get_nasa_power_data(self, lat, lon, location_str):
-        self.api_attempts += 1
-        cache_key = f"{lat:.4f}_{lon:.4f}"
-        cache_file = os.path.join(self.cache_dir, f"nasa_{hashlib.md5(cache_key.encode()).hexdigest()}.json")
+    # Return cached data if exists (offline mode)
+    if os.path.exists(cache_file):
+        with open(cache_file) as f:
+            return json.load(f)
 
-        if os.path.exists(cache_file):
-            with open(cache_file) as f:
-                return json.load(f)
+    # NASA API call (2023 = complete year, no 422 error)
+    url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
+    params = {
+        "parameters": "ALLSKY_SFC_SW_DWN",
+        "community": "RE",
+        "longitude": round(lon, 4),
+        "latitude": round(lat, 4),
+        "format": "JSON",
+        "start": "2023",
+        "end": "2023",
+        "user": os.getenv("NASA_POWER_EMAIL", "user@example.com")
+    }
 
-        # Fake data mode if API fails
-        if self.api_attempts > self.max_attempts:
-            city_key = self.get_city_key(location_str)
-            monthly = FAKE_DATA.get(city_key, FAKE_DATA["default"])
-            result = {
-                "monthly_kwh_m2_day": monthly,
-                "annual_kwh_m2": np.mean(monthly) * 365,
-                "source": "Fake (realistic averages)"
-            }
-            print("Using fake data for demo - delete .cache for real NASA")
-            return result
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        raw = r.json()
 
-        # NASA call with hardened params
-        start_year = "2023"
-        end_year = "2023"
-        email = os.getenv("NASA_POWER_EMAIL", "user@example.com").replace("@", "%40")  # Manual encode if needed
+        # Handle both response formats
+        if 'properties' in raw:
+            ghi_dict = raw['properties'].get('parameter', {}).get('ALLSKY_SFC_SW_DWN', {})
+        else:
+            ghi_dict = raw.get('parameter', {}).get('ALLSKY_SFC_SW_DWN', {})
 
-        url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
-        params = {
-            "parameters": "ALLSKY_SFC_SW_DWN",
-            "community": "RE",
-            "longitude": round(lon, 2),  # NASA prefers 2 decimals
-            "latitude": round(lat, 2),
-            "format": "JSON",
-            "start": start_year,
-            "end": end_year,
-            "user": email
+        if not ghi_dict:
+            raise ValueError("No solar data from NASA")
+
+        # Extract 12 monthly values
+        values = []
+        for key in sorted(ghi_dict.keys()):
+            val = float(ghi_dict[key])
+            values.append(val if val != -999 else np.nan)
+
+        values = values[:12]
+        avg = np.nanmean(values)
+        monthly = [v if not np.isnan(v) else avg for v in values]
+
+        result = {
+            "monthly_kwh_m2_day": monthly,
+            "annual_kwh_m2": np.mean(monthly) * 365
         }
 
-        try:
-            r = requests.get(url, params=params, timeout=30)
-            r.raise_for_status()
-            raw = r.json()
+        # Save cache
+        with open(cache_file, 'w') as f:
+            json.dump(result, f)
 
-            # Robust parsing
-            if 'properties' in raw:
-                parameter = raw['properties'].get('parameter', {})
-            else:
-                parameter = raw.get('parameter', {})
+        return result
 
-            ghi_dict = parameter.get('ALLSKY_SFC_SW_DWN', {})
-            if not ghi_dict:
-                raise ValueError("No GHI data")
+    except Exception as e:
+        raise ValueError(f"NASA failed: {str(e)}. Check internet or email in .env")
 
-            values = [float(ghi_dict[key]) for key in sorted(ghi_dict) if key in ghi_dict][:12]
-            if len(values) < 12:
-                avg = np.mean([v for v in values if v != -999])
-                values += [avg] * (12 - len(values))
+# ====================== GENERATION ======================
+def calculate_generation(lat, lon, system_kw, tilt=None, azimuth=180, efficiency=0.20):
+    if system_kw <= 0:
+        system_kw = 0.1  # Prevent zero division
 
-            values = [v if v != -999 else np.nan for v in values]
-            valid = [v for v in values if not np.isnan(v)]
-            avg_all = np.mean(valid) if valid else 4.5
-            monthly_kwh_per_m2_per_day = [v if not np.isnan(v) else avg_all for v in values]
+    data = get_nasa_power_data(lat, lon)
+    tilt = tilt or max(10, abs(lat))
 
-            result = {
-                "monthly_kwh_m2_day": monthly_kwh_per_m2_per_day,
-                "annual_kwh_m2": np.mean(monthly_kwh_per_m2_per_day) * 365,
-                "source": "NASA POWER"
-            }
+    # Tilt & azimuth correction
+    tilt_factor = 1.0 + 0.12 * np.sin(np.radians(90 - tilt)) * np.cos(np.radians(abs(azimuth - 180)))
+    tilt_factor = max(0.88, min(1.12, tilt_factor))
 
-            with open(cache_file, 'w') as f:
-                json.dump(result, f)
+    monthly_poa = [ghi * tilt_factor for ghi in data["monthly_kwh_m2_day"]]
+    annual_kwh = sum(monthly_poa) * system_kw * efficiency * 0.85
 
-            return result
+    return {
+        "annual_kwh": round(annual_kwh),
+        "monthly_kwh": [round(m * 30.44 * system_kw * efficiency * 0.85) for m in monthly_poa],
+        "peak_sun_hours": round(annual_kwh / system_kw, 2),
+        "data_source": "NASA POWER (cached)" if os.path.exists(
+            os.path.join(CACHE_DIR, f"nasa_{hashlib.md5(f'{lat:.4f}_{lon:.4f}'.encode()).hexdigest()}.json")
+        ) else "NASA POWER (live)"
+    }
 
-        except Exception as e:
-            print(f"NASA attempt {self.api_attempts} failed: {str(e)}")
-            if self.api_attempts < self.max_attempts:
-                return self.get_nasa_power_data(lat, lon, location_str)  # Retry
-            else:
-                # Fallback to fake
-                city_key = self.get_city_key(location_str)
-                monthly = FAKE_DATA.get(city_key, FAKE_DATA["default"])
-                result = {
-                    "monthly_kwh_m2_day": monthly,
-                    "annual_kwh_m2": np.mean(monthly) * 365,
-                    "source": "Fake (realistic averages)"
-                }
-                return result
+# ====================== ECONOMICS ======================
+def economic_analysis(annual_kwh, bill_monthly, cost_total, tariff_increase=0.06, degradation=0.005):
+    if cost_total <= 0:
+        return {"payback_years": "N/A", "total_savings_25y": 0, "roi_percent": 0}
 
-    def calculate_generation(self, lat, lon, system_kw, tilt=None, azimuth=180, efficiency=0.20, location_str=""):
-        data = self.get_nasa_power_data(lat, lon, location_str)
-        if tilt is None:
-            tilt = max(10, abs(lat))
+    savings = []
+    production = annual_kwh
+    for year in range(1, 26):
+        yearly_savings = min(production, bill_monthly * 12) * (1 + tariff_increase)**(year - 1)
+        savings.append(yearly_savings)
+        production *= (1 - degradation)
 
-        # Tilt factor
-        tilt_factor = 1.0 + 0.12 * np.sin(np.radians(tilt)) * np.cos(np.radians(abs(azimuth - 180)))
-        monthly_poa = [ghi * max(0.88, min(1.12, tilt_factor)) for ghi in data["monthly_kwh_m2_day"]]
+    total_savings = sum(savings)
+    cumsum = np.cumsum(savings)
+    payback = next((y for y, s in enumerate(cumsum, 1) if s >= cost_total), ">25")
 
-        annual_kwh = sum(monthly_poa) * system_kw * efficiency * 0.85
-
-        return {
-            "annual_kwh": round(annual_kwh, 0),
-            "monthly_kwh": [round(m * 30.44 * system_kw * efficiency * 0.85, 0) for m in monthly_poa],
-            "peak_sun_hours": round(annual_kwh / system_kw, 2),
-            "data_source": data["source"]
-        }
-
-    def economic_analysis(self, annual_kwh, bill_monthly, cost_total, tariff_increase=0.06, degradation=0.005):
-        savings = []
-        production = annual_kwh
-        for year in range(1, 26):
-            annual_bill = bill_monthly * 12
-            yearly_savings = min(production, annual_bill) * (1 + tariff_increase)**(year - 1)
-            savings.append(yearly_savings)
-            production *= (1 - degradation)
-
-        total_savings = sum(savings)
-        cumsum = np.cumsum(savings)
-        payback = next((y for y, s in enumerate(cumsum, 1) if s >= cost_total), ">25")
-
-        return {
-            "payback_years": payback,
-            "total_savings_25y": int(total_savings),
-            "roi_percent": round((total_savings - cost_total) / cost_total * 100, 1)
-        }
+    return {
+        "payback_years": payback,
+        "total_savings_25y": int(total_savings),
+        "roi_percent": round((total_savings - cost_total) / cost_total * 100, 1)
+    }
