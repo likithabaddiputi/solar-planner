@@ -14,9 +14,9 @@ import base64
 st.set_page_config(page_title="Solar Pro Max", layout="wide", page_icon="⚡")
 
 # Title
-st.title("Solar Planner Tool – Real NASA Data")
+st.title("Solar Planner Tool ")
 
-# Sidebar: 3 Scenario Comparison
+# Sidebar: 3 Scenario Comparison    
 st.sidebar.header("Compare 3 Systems")
 scenarios = ["Basic", "Premium", "Max Power"]
 configs = {}
@@ -47,7 +47,7 @@ with col2:
 
 # Run Analysis
 if st.button("Run Full Analysis – Get Real NASA Results", type="primary", use_container_width=True):
-    with st.spinner("Fetching NASA satellite data for your location..."):
+    with st.spinner("Fetching NASA satellite data for your location..."): #buffer symbol
         try:
             lat, lon, full_address = geocode_location(location)
             st.success(f"Found: {full_address.split(',')[0]} | {lat:.3f}°, {lon:.3f}°")
