@@ -1,0 +1,8 @@
+# requirements.txt
+streamlit
+pvlib
+geopy
+python-dotenv
+requests
+numpy
+pandas
