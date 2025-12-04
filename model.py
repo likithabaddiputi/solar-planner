@@ -41,7 +41,7 @@ def load_model():
 model, scaler = load_model()
 
 # ==================== MAIN FUNCTION: 60 MONTHS PREDICTION ====================
-def predict_future_from_nasa_data(nasa_data_dict, years_ahead=5):
+def predict_future_from_nasa_data(nasa_data_dict, years_ahead=25):
 
     """
     Input: NASA dict with "monthly_kwh_m2_day": [12 values]
@@ -100,13 +100,3 @@ def predict_future_from_nasa_data(nasa_data_dict, years_ahead=5):
         "message": f"AI Prediction: +{boost_percent}% more sunlight by 2029 | Monsoon improving, summers getting stronger!"
     }
 
-# ==================== TEST IT (Run this file directly) ====================
-if __name__ == "__main__":
-    # Test with Mumbai data
-    test_data = {
-        "monthly_kwh_m2_day": [5.3, 5.8, 6.2, 6.4, 6.1, 5.4, 5.2, 5.3, 5.6, 5.8, 5.5, 5.3]
-    }
-    result = predict_future_from_nasa_data(test_data, years_ahead=5)
-    print(result["message"])
-    for i, year in enumerate(result["next_5_years_monthly"]):
-        print(f"Year {2025+i}: {year} → Avg: {np.mean(year):.3f}")
