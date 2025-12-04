@@ -1,6 +1,6 @@
 # app.py
 import streamlit as st
-from dup import (
+from main import (
     calculate_generation,
     economic_analysis
 )
@@ -130,4 +130,5 @@ if st.button("Run Full Analysis – Get Real NASA Results", type="primary", use_
         except Exception as e:
             st.error(f"Error: {str(e)}")
             st.info("Tip: Make sure NASA_POWER_EMAIL is set in Render environment variables.")
+
 
