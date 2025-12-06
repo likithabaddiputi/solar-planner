@@ -1,313 +1,177 @@
-# solar_engine_pro_fixed.py  ← NO CLASSES • NASA POWER (Hourly→Monthly) • FULLY FIXED
-import pvlib
-import pandas as pd
+# app.py
+import streamlit as st
 import numpy as np
-from geopy.geocoders import Nominatim
-import requests
-import os
-import json
-import hashlib
-from dotenv import load_dotenv
-from datetime import datetime
-from model import predict_future_from_nasa_data
+import pandas as pd
+import matplotlib.pyplot as plt
+from model import predict_next_5_years  # ← Your working model.py
 
+st.set_page_config(page_title="Solar Pro Max - AI Powered", layout="wide", page_icon="solar_panel")
 
-load_dotenv()
+st.title("Solar Pro Max – AI-Powered Solar Planner")
+st.markdown("### Real NASA Data + LSTM AI Forecast → Accurate 25-Year Profitability")
 
-# Create cache folder
-CACHE_DIR = ".cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
+# === INPUTS ===
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("Location")
+    lat = st.number_input("Latitude", value=19.0760, format="%.6f")
+    lon = st.number_input("Longitude", value=72.8777, format="%.6f")
 
-geocoder = Nominatim(user_agent="solar-pro-simple")
+with col2:
+    st.subheader("Market Settings")
+    tariff = st.number_input("Current Electricity Rate (₹/kWh)", value=8.5, step=0.5)
+    inflation = st.slider("Annual Tariff Increase (%)", 3.0, 12.0, 6.0) / 100
+    lifespan = st.slider("Project Lifespan (Years)", 20, 30, 25)
 
-# ====================== NASA POWER (Hourly -> Monthly converter) ======================
-def get_nasa_power_data(lat: float, lon: float, year: int = 2025):
-    """
-    Fetch hourly ALLSKY_SFC_SW_DWN from NASA POWER, convert to monthly averages
-    (kWh/m^2/day) suitable for the rest of the generator code.
+st.sidebar.header("Compare 3 Solar Systems")
+scenarios = ["Basic", "Premium", "Beast Mode"]
+configs = {}
 
-    Returns:
-        {
-            "monthly_kwh_m2_day": [m1, m2, ..., m12],
-            "annual_kwh_m2": float,
-            "source": "cached" or "live",
-            "raw_units": "<units string if present>"
+for name in scenarios:
+    with st.sidebar.expander(f"{name} System", expanded=True):
+        defaults = {
+            "Basic": {"size": 6.0, "cost": 42000, "opex": 600},
+            "Premium": {"size": 12.0, "cost": 40000, "opex": 800},
+            "Beast Mode": {"size": 25.0, "cost": 38000, "opex": 1200}
+        }[name]
+
+        size = st.number_input(f"Size (kW)", 1.0, 100.0, defaults["size"], 0.5, key=f"size_{name}")
+        cost_per_kw = st.number_input(f"Cost per kW (₹)", 30000, 60000, defaults["cost"], 1000, key=f"cost_{name}")
+        opex_per_kw = st.number_input(f"O&M per kW/year (₹)", 300, 2000, defaults["opex"], key=f"om_{name}")
+
+        configs[name] = {
+            "size_kw": size,
+            "capex_per_kw": cost_per_kw,
+            "opex_per_kw": opex_per_kw,
+            "color": {"Basic": "#1f77b4", "Premium": "#ff7f0e", "Beast Mode": "#2ca02c"}[name]
         }
-    """
-    # cache key includes year and endpoint type
-    cache_key = f"hourly_{year}_{lat:.4f}_{lon:.4f}"
-    cache_file = os.path.join(CACHE_DIR, f"nasa_{hashlib.md5(cache_key.encode()).hexdigest()}.json")
 
-    # Return cached data if exists (offline mode)
-    if os.path.exists(cache_file):
+# === RUN ANALYSIS ===
+if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_container_width=True):
+    with st.spinner("Fetching NASA data & running AI forecast (takes ~10–20 sec first time)..."):
         try:
-            with open(cache_file) as f:
-                cached = json.load(f)
-                cached["source"] = "NASA POWER (cached)"
-                return cached
-        except Exception:
-            # if cache is corrupt, delete and continue to fetch live
-            try:
-                os.remove(cache_file)
-            except Exception:
-                pass
+            # This uses your model.py → returns dict with predicted_5y
+            result = predict_next_5_years(lat, lon)
 
-    # Build request for hourly API
-    url = "https://power.larc.nasa.gov/api/temporal/hourly/point"
-    start = f"20210101"
-    end = f"20251202"
-    params = {
-        "parameters": "ALLSKY_SFC_SW_DWN",
-        "community": "RE",
-        "longitude": round(lon, 4),
-        "latitude": round(lat, 4),
-        "format": "JSON",
-        "start": start,     # YYYYMMDD
-        "end": end,         # YYYYMMDD
-        "header": True,
-        "time-standard": "UTC"
-        # intentionally no 'user' here; optional
-    }
+            # Extract AI-predicted monthly GHI for next 5 years
+            predicted_years = result["predicted_5y"]  # List of 5 lists (each 12 months)
+            historical = np.array(result["historical"])
 
-    try:
-        r = requests.get(url, params=params, timeout=40)
-        # raise_for_status will raise for 4xx/5xx
-        r.raise_for_status()
-        raw = r.json()
-    except requests.exceptions.HTTPError as e:
-        # Try to surface NASA's messages if present
-        try:
-            raw = r.json()
-            print(raw)
-            #seems like not so important just checks if NASA wants to send any messages
-            msgs = raw.get("messages", []) #returns empty list if not present
-            raise ValueError(f"NASA HTTP {r.status_code}: {msgs or str(e)}")
-        except Exception:
-            raise ValueError(f"NASA HTTP {getattr(r, 'status_code', '??')}: {str(e)}")
-    except Exception as e:
-        raise ValueError(f"Failed to contact NASA POWER: {str(e)}")
+            # Use first predicted year as baseline (most accurate)
+            baseline_monthly_ghi = np.array(predicted_years[0])  # Year 2025
+            annual_ghi = np.sum(baseline_monthly_ghi) * 30.4375  # kWh/m²/year
 
-    # Validate response
-    if raw is None:
-        raise ValueError("NASA returned empty response")
+            st.success("AI Forecast Loaded Successfully!")
+            st.write(f"**AI Prediction**: Next 5-year average GHI: `{np.mean(predicted_years):.3f}` kWh/m²/day "
+                     f"(Trend: **{result['trend_percent']:+.2f}%**)")
 
-    # If NASA sends error messages and no properties -> stop
-    if "messages" in raw and raw.get("properties") is None:
-        raise ValueError(f"NASA POWER error: {raw.get('messages')}")
+            # === Financial Calculation ===
+            results = {}
+            for name, cfg in configs.items():
+                size = cfg["size_kw"]
+                total_cost = size * cfg["capex_per_kw"]
+                first_year_kwh = annual_ghi * size * 0.82  # System efficiency ~82%
 
-    props = raw.get("properties")
-    if props is None:
-        # Some responses might place parameter in top-level 'parameter'
-        props = {"parameter": raw.get("parameter")} if raw.get("parameter") else None
-        if props is None:
-            raise ValueError("NASA response missing 'properties' or 'parameter'")
+                cumulative = -total_cost
+                cashflows = [cumulative]
 
-    parameter = props.get("parameter")
-    if parameter is None:
-        raise ValueError("NASA response missing 'parameter' key inside 'properties'")
+                for year in range(1, lifespan + 1):
+                    prod = first_year_kwh * (1 - 0.005) ** (year - 1)  # 0.5% degradation
+                    rate = tariff * (1 + inflation) ** (year - 1)
+                    revenue = prod * rate
+                    opex = size * cfg["opex_per_kw"]
+                    net = revenue - opex
+                    cumulative += net
+                    cashflows.append(cumulative)
 
-    ghi_dict = parameter.get("ALLSKY_SFC_SW_DWN") #monthly solar energy dict 
-    if ghi_dict is None:
-        raise ValueError("NASA response does not contain ALLSKY_SFC_SW_DWN data")
+                payback = next((y for y, c in enumerate(cashflows) if c >= 0), None)
+                payback_str = f"{payback} years" if payback else ">25 years"
 
-    # Try to detect units if provided in the 'parameters' section
-    raw_units = ""
-    parameters_meta = raw.get("parameters", {})
-    if isinstance(parameters_meta, dict):
-        meta = parameters_meta.get("ALLSKY_SFC_SW_DWN", {})
-        raw_units = meta.get("units", "") or ""
+                results[name] = {
+                    "size": size,
+                    "cost": total_cost,
+                    "first_year_kwh": int(first_year_kwh),
+                    "payback": payback_str,
+                    "profit_25y": int(cumulative),
+                    "cashflows": cashflows,
+                    "color": cfg["color"]
+                }
 
-    # Convert hourly series (timestamps as strings) to daily totals
-    # GHI hourly values: often in W/m^2 (instantaneous) — convert to Wh/m^2 by summing hourly W/m^2 * 1 hour -> Wh/m^2
-    # then to kWh/m^2 by dividing by 1000.
-    # If units mention 'kwh' treat values as kWh (per hour) and sum directly.
+            # === DISPLAY RESULTS ===
+            st.markdown("---")
+            st.subheader("Your 3 Solar Investment Options")
 
-    # Normalize ghi_dict: keys -> sorted list
-    # ghi_dict example keys: "2023010100", "2023010101", ... (YYYYMMDDHH)
-    try:
-        items = sorted(ghi_dict.items()) #sorts keys and corresponding values
-    except Exception:
-        # If ghi_dict is not a dict, fail gracefully
-        raise ValueError("Unexpected ALLSKY_SFC_SW_DWN structure from NASA")
+            cols = st.columns(3)
+            for idx, (name, r) in enumerate(results.items()):
+                with cols[idx]:
+                    st.markdown(f"### {name}")
+                    st.metric("System Size", f"{r['size']:.1f} kW")
+                    st.metric("Total Cost", f"₹{r['cost']:,.0f}")
+                    st.metric("First Year Output", f"{r['first_year_kwh']:,} kWh")
+                    st.metric("Payback Period", r['payback'])
+                    st.metric("25-Year Profit", f"₹{r['profit_25y']:,.0f}")
 
-    # Build daily sums
-    daily_sums = {}        # date (YYYYMMDD) -> sum of hourly values (in kWh/m^2)
-    daily_counts = {}      # number of valid hours available for that day
-    for ts, v in items:
-        # ts might be like '2023010100' or '20230101T00:00' or '2023-01-01T00:00'
-        # Normalize timestamp string to YYYYMMDDHH
-        if v is None:
-            continue
+                    if "years" in r['payback'] and int(r['payback'].split()[0]) <= 6:
+                        st.success("MONEY PRINTER!")
+                    elif int(r['payback'].split()[0]) <= 9:
+                        st.warning("Strong Investment")
+                    else:
+                        st.info("Long-term Savings")
 
-        try:
-            val = float(v)
-        except Exception:
-            continue
+            # === Cash Flow Chart ===
+            st.subheader("Cumulative Profit Over Time")
+            fig, ax = plt.subplots(figsize=(12, 6))
+            for name, r in results.items():
+                ax.plot(range(lifespan + 1), r["cashflows"], label=f"{name} ({r['size']:.0f}kW)", 
+                        linewidth=3, color=r["color"])
 
-        # skip NASA fill value
-        if val == -999: #-999 means missing data acc to NASA
-            continue
+            ax.axhline(0, color="black", linestyle="--", alpha=0.7)
+            ax.set_xlabel("Years")
+            ax.set_ylabel("Cumulative Profit (₹)")
+            ax.set_title("25-Year Solar Investment Cash Flow (AI Forecasted Sunlight)")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
 
-        # normalize timestamp into YYYYMMDD and hour
-        ts_str = str(ts)
-        # handle different timestamp formats heuristically
+            # === Show AI Forecast Data ===
+                        # === BEAUTIFUL HISTORICAL + AI FORECAST GRAPH (LIKE YOUR SCREENSHOT) ===
+            with st.expander("AI Solar Radiation Forecast – 40+ Years History + Next 5 Years", expanded=True):
+                st.subheader("40+ Years of NASA Data + LSTM AI Prediction")
 
-        #This part gives us the date in YYYYMMDD format
-        if len(ts_str) >= 10 and ts_str[4] == "-":  # ISO like 2023-01-01T00:00
-            try:
-                dt = datetime.fromisoformat(ts_str.replace("Z", ""))
-                day = dt.strftime("%Y%m%d")
-            except Exception:
-                # fallback: take first 8 chars
-                day = ts_str.replace("-", "")[:8]
-        else:
-            # simple case: YYYYMMDDHH or YYYYMMDDHHMM
-            day = ts_str[:8]
+                # Extract data from model.py result
+                historical_ghi = np.array(result["historical"])           # Full history
+                predicted_ghi = np.array(result["predicted_5y"]).flatten()  # Next 60 months (5 years)
 
-        # Determine units & convert hourly value into kWh/m^2 for that hour
-        # Heuristic rules:
-        # - if units mention 'kwh' -> assume value is kWh/m^2 per hour (rare) -> keep as-is
-        # - else assume W/m^2 instantaneous -> convert to kWh by val (W/m^2) * 1 hour / 1000 = kWh/m^2
-        if raw_units and "kwh" in raw_units.lower():
-            hour_kwh = val  # already kWh (per that hour)
-        else:
-            # assume W/m^2 instantaneous -> Wh/m^2 for 1 hour = W * 1h -> divide by 1000 -> kWh
-            hour_kwh = val / 1000.0
+                # Create the plot
+                fig, ax = plt.subplots(figsize=(16, 8))
 
-        daily_sums[day] = daily_sums.get(day, 0.0) + hour_kwh #adds if existing else adds 0 to the value and adds to the dictionary
-        daily_counts[day] = daily_counts.get(day, 0) + 1
+                # Historical data (blue)
+                ax.plot(historical_ghi, label="NASA Historical Data (1984–2024)", 
+                        color="#1f77b4", linewidth=2.2, alpha=0.9)
 
-    # Now compute daily kWh/m^2/day, handling missing hours:
-    # If a day has many missing hours, we try to scale if enough hours exist; else mark NaN
-    daily_values = {}
-    for day, total_kwh in daily_sums.items():
-        count = daily_counts.get(day, 0)
-        if count == 0:
-            daily_values[day] = np.nan
-            continue
-        # If some hours missing but most present, scale to full day
-        # e.g., if count >= 18 (>=75% hours), scale total to 24-hour equivalent
-        if count >= 18:
-            scaled = total_kwh * (24.0 / count)
-            daily_values[day] = scaled
-        else:
-            # Not enough hours to trust scaling: set as NaN (will be imputed later)
-            daily_values[day] = np.nan
+                # AI Forecast (red, dashed)
+                future_x = np.arange(len(historical_ghi), len(historical_ghi) + len(predicted_ghi))
+                ax.plot(future_x, predicted_ghi, label="AI Forecast (2025–2050)", 
+                        color="#d62728", linewidth=3, linestyle="--", alpha=0.95)
 
-    # Create a DataFrame indexed by date to ease monthly aggregation
-    # We want a row per day for the whole year (even days with no data)
-    all_days = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq="D")
-    df = pd.DataFrame(index=all_days)
-    # map daily_values into df
-    df["kwh_m2_day"] = [daily_values.get(d.strftime("%Y%m%d"), np.nan) for d in all_days]
+                # Styling — exactly like your original  
+                ax.set_xlabel("Months", fontsize=14)
+                ax.set_ylabel("Monthly Avg GHI (kWh/m²/day)", fontsize=14)
+                ax.legend(fontsize=12, loc="upper left")
+                ax.grid(True, alpha=0.3)
 
-    # Fill missing daily values using reasonable approach:
-    # 1) If there are NaNs, replace them with the mean of available days (nanmean).
-    # 2) This is conservative and keeps monthly averages smooth.
-    if df["kwh_m2_day"].isna().all():
-        # extreme: no valid data at all -> fallback to a default value (4.5 kWh/m2/day)
-        df["kwh_m2_day"].fillna(4.5, inplace=True)
-    else:
-        daily_mean = float(np.nanmean(df["kwh_m2_day"]))
-        df["kwh_m2_day"].fillna(daily_mean, inplace=True)
+                # Stats box
+                last_year_avg = np.mean(historical_ghi[-12:])
+                forecast_avg = np.mean(predicted_ghi)
+                trend = (forecast_avg - last_year_avg) / last_year_avg * 100
+                stats_text = (f"Last Year Avg: {last_year_avg:.3f}\n"
+                              f"5-Year Forecast Avg: {forecast_avg:.3f}\n"
+                              f"Trend: {trend:+.2f}%")
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=11,
+                        verticalalignment='top', bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.9))
 
-    # Now compute monthly average daily kWh/m2/day for each month (1..12)
-    monthly = []
-    for month in range(1, 13):
-        month_days = df[df.index.month == month]["kwh_m2_day"].values
-        if len(month_days) == 0:
-            monthly.append(float(daily_mean))
-        else:
-            monthly.append(float(np.mean(month_days)))
+                st.pyplot(fig)
 
-    # Ensure we have 12 entries
-    monthly = monthly[:12]
-
-    result = {
-        "monthly_kwh_m2_day": monthly,
-        "annual_kwh_m2": float(np.mean(monthly) * 365.0),
-        "raw_units": raw_units,
-        "source": "NASA POWER (live)"
-    }
-
-    # Cache result for offline and fast reuse
-    try:
-        with open(cache_file, "w") as f:
-            json.dump(result, f)
-    except Exception:
-        # cache errors shouldn't stop execution
-        pass
-
-    return result
-
-# ====================== GENERATION ======================
-def calculate_generation(lat, lon, system_kw, tilt=None, azimuth=180, efficiency=0.20, years_ahead=5):
-    """
-    Calculate current generation and project future annual generation based on predicted GHI trends.
-    Returns:
-        - current annual + monthly kWh
-        - predicted annual kWh for next N years
-        - peak sun hours
-        - data source
-    """
-    if system_kw <= 0:
-        system_kw = 0.1  # Prevent zero division
-
-    # --- Get NASA data ---
-    nasa_data = get_nasa_power_data(lat, lon)
-    future = predict_future_from_nasa_data(nasa_data, years_ahead=years_ahead)
-
-    tilt = tilt or max(10, abs(lat))
-    # Simple tilt & azimuth factor
-    tilt_factor = 1.0 + 0.12 * np.sin(np.radians(90 - tilt)) * np.cos(np.radians(abs(azimuth - 180)))
-    tilt_factor = max(0.88, min(1.12, tilt_factor))
-
-    # --- Current monthly/annual production ---
-    monthly_poa = [ghi * tilt_factor for ghi in nasa_data["monthly_kwh_m2_day"]]
-    annual_kwh = sum(monthly_poa) * system_kw * efficiency * 0.85
-    monthly_kwh = [round(m * 30.44 * system_kw * efficiency * 0.85) for m in monthly_poa]
-
-    # --- Future annual production ---
-    avg_current_ghi = np.mean(nasa_data["monthly_kwh_m2_day"])
-    future_annual_kwh = [
-        round(annual_kwh * (ghi / avg_current_ghi)) for ghi in future["next_years"]
-    ]
-
-    return {
-        "annual_kwh": round(annual_kwh),
-        "monthly_kwh": monthly_kwh,
-        "future_annual_kwh": future_annual_kwh,  # for future economics
-        "peak_sun_hours": round(annual_kwh / system_kw, 2),
-        "data_source": nasa_data.get("source", "NASA POWER (live)"),
-        "future_message": future.get("message")
-    }
-
-
-# ====================== ECONOMICS ======================
-def economic_analysis(annual_kwh, bill_monthly, cost_total, tariff_increase=0.06, degradation=0.005):
-    """
-    Compute payback, total savings, and ROI based on projected annual generation
-    future_annual_kwh: list of kWh/year for each future year
-    """
-    if cost_total <= 0:
-        return {"payback_years": "N/A", "total_savings_25y": 0, "roi_percent": 0}
-
-    savings = []
-    for year, production in enumerate(annual_kwh, start=1):
-        # Apply degradation
-        production_adj = production * ((1 - degradation) ** (year - 1))
-        # Savings capped by actual bill
-        yearly_savings = min(production_adj, bill_monthly * 12) * (1 + tariff_increase) ** (year - 1)
-        savings.append(yearly_savings)
-
-    total_savings = sum(savings)
-    cumsum = np.cumsum(savings)
-    payback = next((y for y, s in enumerate(cumsum, 1) if s >= cost_total), 26)
-
-    return {
-        "payback_years": payback,
-        "total_savings_25y": int(total_savings),
-        "roi_percent": round((total_savings - cost_total) / cost_total * 100, 1)
-    }
-
-get_nasa_power_data(19.0760,72.8777)
+        except Exception as e:
+            st.error(f"Error: {e}")
+            st.info("Check your model.py is in the same folder and working.")
