@@ -1,102 +1,172 @@
-# model.py — FINAL VERSION: Predicts FULL 60 MONTHS (5 years) with seasonal pattern
+# solar_predictor.py
+# Fully standalone — fetches NASA data → trains LSTM → predicts next 5 years → beautiful plot
+
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
-import joblib
+import matplotlib.pyplot as plt
+import requests
 import os
 
-# ==================== LSTM MODEL (Best for monthly solar) ====================
-class LSTMModel(nn.Module):
-    def __init__(self):
+# ==================== LSTM MODEL ====================
+class SimpleLSTM(nn.Module):
+    def __init__(self, hidden_size=64, num_layers=2):
         super().__init__()
-        self.lstm = nn.LSTM(input_size=1, hidden_size=100, num_layers=2, batch_first=True, dropout=0.3)
-        self.fc = nn.Linear(100, 1)
-        self.dropout = nn.Dropout(0.2)
+        self.lstm = nn.LSTM(input_size=1, hidden_size=hidden_size,
+                            num_layers=num_layers, batch_first=True, dropout=0.3)
+        self.fc = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
         out, _ = self.lstm(x)
-        out = self.dropout(out)
-        return self.fc(out[:, -1, :])  # predict next month
+        return self.fc(out[:, -1, :])  # Predict next value
 
-# ==================== LOAD MODEL & SCALER (once) ====================
-MODEL_PATH = "solar_lstm_model.pt"
-SCALER_PATH = "solar_scaler.pkl"
 
-def load_model():
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-        print("No trained AI model found → Using smart fallback (still accurate!)")
-        return None, None
+# ==================== FETCH NASA DATA ====================
+def fetch_nasa_monthly(lat, lon, start=1984, end=2024):
+    url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
+    params = {
+        "parameters": "ALLSKY_SFC_SW_DWN",
+        "community": "RE",
+        "longitude": lon,
+        "latitude": lat,
+        "start": start,
+        "end": end,
+        "format": "JSON"
+    }
     try:
-        model = LSTMModel()
-        model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
-        model.eval()
-        scaler = joblib.load(SCALER_PATH)
-        print("AI Model loaded — Predicting with NASA-level accuracy")
-        return model, scaler
-    except:
-        print("Model corrupt → Using fallback")
-        return None, None
+        print(f"Fetching NASA monthly GHI data for ({lat}, {lon}) from {start} to {end}...")
+        r = requests.get(url, params=params, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        ghi_dict = data["properties"]["parameter"]["ALLSKY_SFC_SW_DWN"]
 
-model, scaler = load_model()
+        values = []
+        for key in sorted(ghi_dict.keys()):
+            val = ghi_dict[key]
+            if val not in (-999, None, -99):
+                values.append(float(val))
+            else:
+                values.append(values[-1] if values else 5.0)
+        print(f"Successfully fetched {len(values)} months of real NASA data")
+        return np.array(values, dtype=np.float32)
+    except Exception as e:
+        print(f"NASA request failed: {e}")
+        print("Using synthetic data for demo...")
+        t = np.linspace(0, 40*12, 40*12)
+        return 4.8 + 1.2 * np.sin(t * np.pi / 6) + np.random.normal(0, 0.4, len(t))
 
-# ==================== MAIN FUNCTION: 60 MONTHS PREDICTION ====================
-def predict_future_from_nasa_data(nasa_data_dict, years_ahead=25):
 
-    """
-    Input: NASA dict with "monthly_kwh_m2_day": [12 values]
-    Output: Full 5 years (60 months) of predicted sunlight + message
-    """
-    current_12_months = np.array(nasa_data_dict["monthly_kwh_m2_day"])  # e.g., [5.3, 5.8, 6.2, ...]
+# ==================== MAIN PREDICTION FUNCTION ====================
+def predict_next_5_years(lat, lon, model_path="solar_lstm_temp.pt"):
+    # 1. Get historical data
+    monthly_data = fetch_nasa_monthly(lat, lon)
+    if len(monthly_data) < 100:
+        raise ValueError("Not enough data")
 
-    # ——— CASE 1: No trained model → Smart fallback (still better than others) ———
-    if model is None or scaler is None:
-        future_60_months = []
-        base_pattern = current_12_months.copy()
-        for year in range(years_ahead):
-            # Increase sunlight slightly every year (+0.7% to 1.2%)
-            boost = 1 + (0.007 + year * 0.001)
-            new_year = base_pattern * boost
-            future_60_months.extend([round(x, 3) for x in new_year])
-        
-        final_boost = round((np.mean(future_60_months[-12:]) / np.mean(current_12_months) - 1) * 100, 1)
-        return {
-            "next_5_years_monthly": [future_60_months[i:i+12] for i in range(0, 60, 12)],
-            "message": f"AI Prediction: +{final_boost}% more sunlight by 2029 | Seasonal pattern preserved!"
-        }
+    # 2. Normalize
+    mean_val = monthly_data.mean()
+    std_val = monthly_data.std()
+    normalized = (monthly_data - mean_val) / std_val
 
-    # ——— CASE 2: REAL AI PREDICTION (60 steps ahead) ———
-    seq = current_12_months.reshape(-1, 1)
-    scaled_seq = scaler.transform(seq)
-    input_tensor = torch.FloatTensor(scaled_seq).unsqueeze(0)  # shape: (1, 12, 1)
+    # 3. Create sequences
+    seq_len = 24
+    X, y = [], []
+    for i in range(len(normalized) - seq_len):
+        X.append(normalized[i:i + seq_len])
+        y.append(normalized[i + seq_len])
+    X = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)  # [samples, 24, 1]
+    y = torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
 
-    predicted_months = []
+    # 4. Model
+    model = SimpleLSTM(hidden_size=64, num_layers=2)
+    if os.path.exists(model_path):
+        print("Loading saved model...")
+        model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    else:
+        print("Training LSTM model on historical data...")
+        model.train()
+        opt = torch.optim.Adam(model.parameters(), lr=0.001)
+        loss_fn = nn.MSELoss()
+        for epoch in range(80):
+            opt.zero_grad()
+            pred = model(X)
+            loss = loss_fn(pred, y)
+            loss.backward()
+            opt.step()
+            if (epoch + 1) % 20 == 0:
+                print(f"   Epoch {epoch+1:2d}/80 - Loss: {loss.item():.6f}")
+        torch.save(model.state_dict(), model_path)
+        print(f"Model saved → {model_path}")
 
+    # 5. Predict next 60 months
+    model.eval()
     with torch.no_grad():
-        current_input = input_tensor
-        for _ in range(years_ahead * 12):  # 60 months
-            pred_scaled = model(current_input)
-            pred_value = pred_scaled.item()
-            predicted_months.append(pred_value)
+        predictions = []
+        current_seq = torch.tensor(normalized[-seq_len:], dtype=torch.float32).unsqueeze(0).unsqueeze(-1)  # [1, 24, 1]
+                          
+        for _ in range(300):
+            next_val = model(current_seq)              # [1, 1]
+            predictions.append(next_val.item())
+            # Slide window: remove oldest, append new prediction
+            current_seq = torch.cat([current_seq[:, 1:, :], next_val.unsqueeze(-1)], dim=1)
 
-            # Slide window: remove oldest month, add new prediction
-            new_input = torch.cat((current_input[:, 1:, :], pred_scaled.unsqueeze(0)), dim=1)
-            current_input = new_input
+    # 6. Denormalize
+    predicted = np.array(predictions) * std_val + mean_val
+    predicted = np.round(predicted, 3)
 
-    # Reverse scaling
-    predicted_real = scaler.inverse_transform(np.array(predicted_months).reshape(-1, 1)).flatten()
-    predicted_rounded = [round(float(x), 3) for x in predicted_real]
+    # 7. Beautiful Plot
+    plt.figure(figsize=(16, 8), dpi=120)
+    x_hist = np.arange(len(monthly_data))
+    x_future = np.arange(len(monthly_data), len(monthly_data) + 300)
 
-    # Group into 5 years
-    future_5y_monthly = [predicted_rounded[i:i+12] for i in range(0, len(predicted_rounded), 12)]
+    with open("x_future.txt", "w") as f:
+        for x in x_future:
+            f.write(f"{x}\n")
 
-    # Calculate boost
-    final_year_avg = np.mean(future_5y_monthly[-1])
-    current_avg = np.mean(current_12_months)
-    boost_percent = round((final_year_avg / current_avg - 1) * 100, 1)
+    plt.plot(x_hist, monthly_data, label="NASA Historical Data (1984–2024)", color="#1f77b4", linewidth=2)
+    plt.plot(x_future, predicted, label="AI Forecast (Next 5 Years)", color="#d62728", linewidth=2.8, linestyle="--")
+
+    plt.axvline(len(monthly_data) - 1, color="gray", linestyle=":", linewidth=2, label="Forecast Begins")
+
+    # Styling
+    plt.title(f"Solar Radiation Forecast for Latitude {lat}°, Longitude {lon}°\n"
+              "40+ Years NASA Data + LSTM AI Prediction", fontsize=18, fontweight="bold", pad=20)
+    plt.xlabel("Months", fontsize=14)
+    plt.ylabel("Monthly Avg GHI (kWh/m²/day)", fontsize=14)
+    plt.legend(fontsize=12, loc="upper left")
+    plt.grid(True, alpha=0.3)
+
+    # Stats box
+    last_year = np.mean(monthly_data[-12:])
+    forecast_avg = np.mean(predicted)
+    change = (forecast_avg - last_year) / last_year * 100
+    stats = f"Last Year Avg: {last_year:.3f}\nForecast Avg: {forecast_avg:.3f}\nChange: {change:+.2f}%"
+    plt.text(0.02, 0.98, stats, transform=plt.gca().transAxes, fontsize=12,
+             verticalalignment='top', bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.9))
+
+    plt.tight_layout()
+    plt.show()
+
+    # 8. Print results
+    print("\n" + "="*60)
+    print("AI FORECAST: NEXT 5 YEARS (Monthly GHI in kWh/m²/day)")
+    print("="*60)
+    years = [predicted[i:i+12] for i in range(0, 300, 12)]
+    for i, year in enumerate(years):
+        print(f"Year {2025 + i}: {year}")
+    print(f"\nOverall Trend: {change:+.2f}% vs last year")
 
     return {
-        "next_5_years_monthly": future_5y_monthly,
-        "message": f"AI Prediction: +{boost_percent}% more sunlight by 2029 | Monsoon improving, summers getting stronger!"
+        "historical": monthly_data.tolist(),
+        "predicted_5y": years,
+        "trend_percent": round(change, 2)
     }
 
+
+# ==================== RUN IT ====================
+if __name__ == "__main__":
+    # Change these coordinates to your location!
+    LAT = 19.0760   # Example: Mumbai
+    LON = 72.8777
+
+    result = predict_next_5_years(LAT, LON)
