@@ -1,10 +1,8 @@
-streamlit-option-menu
-streamlit
-pvlib
-geopy
-python-dotenv
-requests
 numpy
+torch
+torch.nn
+matplotlib
+requests
+os
+streamlit
 pandas
-fpdf2
-pillow
