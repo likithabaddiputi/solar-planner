@@ -1,6 +1,3 @@
-# solar_predictor.py
-# Fully standalone — fetches NASA data → trains LSTM → predicts next 5 years → beautiful plot
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -52,30 +49,32 @@ def fetch_nasa_monthly(lat, lon, start=1984, end=2024):
     except Exception as e:
         print(f"NASA request failed: {e}")
         print("Using synthetic data for demo...")
-        t = np.linspace(0, 40*12, 40*12)
-        return 4.8 + 1.2 * np.sin(t * np.pi / 6) + np.random.normal(0, 0.4, len(t))
+        exit()
 
 
 # ==================== MAIN PREDICTION FUNCTION ====================
-def predict_next_5_years(lat, lon, model_path="solar_lstm_temp.pt"):
+def predict_next_25_years(lat, lon, model_path="solar_lstm_temp.pt"):
     # 1. Get historical data
-    monthly_data = fetch_nasa_monthly(lat, lon)
+    monthly_data = fetch_nasa_monthly(lat, lon) #here monthly_data is a numpy array
     if len(monthly_data) < 100:
         raise ValueError("Not enough data")
 
     # 2. Normalize
-    mean_val = monthly_data.mean()
+    mean_val = monthly_data.mean() # Calculate mean and std for normalization
     std_val = monthly_data.std()
-    normalized = (monthly_data - mean_val) / std_val
+    normalized = (monthly_data - mean_val) / std_val # Z-score normalization
 
     # 3. Create sequences
-    seq_len = 24
+    seq_len = 24 # to predict next month based on past 24 months
     X, y = [], []
     for i in range(len(normalized) - seq_len):
-        X.append(normalized[i:i + seq_len])
-        y.append(normalized[i + seq_len])
-    X = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)  # [samples, 24, 1]
+        X.append(normalized[i:i + seq_len]) # sequences of 24 months
+        y.append(normalized[i + seq_len])  # next month value
+    X = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)  # converts python list to torch tensor so that LSTM can process it properly and has numbers of format float32
+    print(X)                                                            #and then we add an extra dimension at the end by unsqueeze(-1) to represent single feature input 
     y = torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
+    print(y)
+    #we can think X as an excel sheet where each row is a sequence of 24 months and each column is a feature (here only 1 feature: GHI)
 
     # 4. Model
     model = SimpleLSTM(hidden_size=64, num_layers=2)
@@ -93,12 +92,12 @@ def predict_next_5_years(lat, lon, model_path="solar_lstm_temp.pt"):
             loss = loss_fn(pred, y)
             loss.backward()
             opt.step()
-            if (epoch + 1) % 20 == 0:
+            if (epoch + 1) % 20 == 0: # Print every 20 epochs
                 print(f"   Epoch {epoch+1:2d}/80 - Loss: {loss.item():.6f}")
         torch.save(model.state_dict(), model_path)
         print(f"Model saved → {model_path}")
 
-    # 5. Predict next 60 months
+    # 5. Predict next 300 months == 25 yrs
     model.eval()
     with torch.no_grad():
         predictions = []
@@ -119,12 +118,8 @@ def predict_next_5_years(lat, lon, model_path="solar_lstm_temp.pt"):
     x_hist = np.arange(len(monthly_data))
     x_future = np.arange(len(monthly_data), len(monthly_data) + 300)
 
-    with open("x_future.txt", "w") as f:
-        for x in x_future:
-            f.write(f"{x}\n")
-
     plt.plot(x_hist, monthly_data, label="NASA Historical Data (1984–2024)", color="#1f77b4", linewidth=2)
-    plt.plot(x_future, predicted, label="AI Forecast (Next 5 Years)", color="#d62728", linewidth=2.8, linestyle="--")
+    plt.plot(x_future, predicted, label="AI Forecast (Next 25 Years)", color="#d62728", linewidth=2.8, linestyle="--")
 
     plt.axvline(len(monthly_data) - 1, color="gray", linestyle=":", linewidth=2, label="Forecast Begins")
 
@@ -158,7 +153,7 @@ def predict_next_5_years(lat, lon, model_path="solar_lstm_temp.pt"):
 
     return {
         "historical": monthly_data.tolist(),
-        "predicted_5y": years,
+        "predicted_25y": years,
         "trend_percent": round(change, 2)
     }
 
@@ -169,4 +164,4 @@ if __name__ == "__main__":
     LAT = 19.0760   # Example: Mumbai
     LON = 72.8777
 
-    result = predict_next_5_years(LAT, LON)
+    result = predict_next_25_years(LAT, LON)
