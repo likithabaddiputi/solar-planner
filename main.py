@@ -1,4 +1,4 @@
-# app.py
+# main.py
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
@@ -176,3 +176,4 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
         except Exception as e:
             st.error(f"Error: {e}")
             st.info("Check your model.py is in the same folder and working.")
+
