@@ -1,9 +1,8 @@
 # app.py
 import streamlit as st
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from model import predict_next_5_years  # ← Your working model.py
+from model import predict_next_25_years  # ← Your working model.py
 
 st.set_page_config(page_title="Solar Pro Max - AI Powered", layout="wide", page_icon="solar_panel")
 
@@ -50,19 +49,21 @@ for name in scenarios:
 if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_container_width=True):
     with st.spinner("Fetching NASA data & running AI forecast (takes ~10–20 sec first time)..."):
         try:
-            # This uses your model.py → returns dict with predicted_5y
-            result = predict_next_5_years(lat, lon)
+            # This uses your model.py → returns dict with predicted_25y
+            result = predict_next_25_years(lat, lon)
 
-            # Extract AI-predicted monthly GHI for next 5 years
-            predicted_years = result["predicted_5y"]  # List of 5 lists (each 12 months)
+            # Extract AI-predicted monthly GHI for next 25 years
+            predicted_years = result["predicted_25y"]  # List of 25 lists (each 12 months)
             historical = np.array(result["historical"])
 
             # Use first predicted year as baseline (most accurate)
-            baseline_monthly_ghi = np.array(predicted_years[0])  # Year 2025
-            annual_ghi = np.sum(baseline_monthly_ghi) * 30.4375  # kWh/m²/year
+            baseline_monthly_ghi = np.array(predicted_years[0])  # Year 2025 on average each day in a month gets this much GHI
+            days = np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
+            annual_ghi = np.sum(baseline_monthly_ghi * days) # we are multiplying each month's avg GHI by number of days in that month and summing it up to get annual GHI
+  # kWh/m²/year
 
             st.success("AI Forecast Loaded Successfully!")
-            st.write(f"**AI Prediction**: Next 5-year average GHI: `{np.mean(predicted_years):.3f}` kWh/m²/day "
+            st.write(f"**AI Prediction**: Next 25-year average GHI: `{np.mean(predicted_years):.3f}` kWh/m²/day "
                      f"(Trend: **{result['trend_percent']:+.2f}%**)")
 
             # === Financial Calculation ===
@@ -135,12 +136,12 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
 
             # === Show AI Forecast Data ===
                         # === BEAUTIFUL HISTORICAL + AI FORECAST GRAPH (LIKE YOUR SCREENSHOT) ===
-            with st.expander("AI Solar Radiation Forecast – 40+ Years History + Next 5 Years", expanded=True):
+            with st.expander("AI Solar Radiation Forecast – 40+ Years History + Next 25 Years", expanded=True):
                 st.subheader("40+ Years of NASA Data + LSTM AI Prediction")
 
                 # Extract data from model.py result
                 historical_ghi = np.array(result["historical"])           # Full history
-                predicted_ghi = np.array(result["predicted_5y"]).flatten()  # Next 60 months (5 years)
+                predicted_ghi = np.array(result["predicted_25y"]).flatten()  # Next 60 months (5 years)
 
                 # Create the plot
                 fig, ax = plt.subplots(figsize=(16, 8))
