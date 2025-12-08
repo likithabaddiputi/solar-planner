@@ -1,4 +1,4 @@
-# Solar Pro Max – AI-Powered Solar Investment Planner ☀️
+# Solar Income Forecaster – AI-Powered Solar Investment Planner ☀️
 
 **Real NASA satellite data + Deep Learning (LSTM) forecast → Accurate 25-year profitability analysis**
 
