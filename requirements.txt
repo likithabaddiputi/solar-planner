@@ -1,6 +1,5 @@
 numpy
 torch
-torch.nn
 matplotlib
 requests
 os
