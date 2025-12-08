@@ -4,4 +4,3 @@ matplotlib
 requests
 os
 streamlit
-pandas
