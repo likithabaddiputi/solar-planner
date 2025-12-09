@@ -1,13 +1,12 @@
-# main.py
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from model import predict_next_25_years  # ← Your working model.py
+from model import predict_next_years  
 
 st.set_page_config(page_title="Solar Pro Max - AI Powered", layout="wide", page_icon="solar_panel")
 
 st.title("Solar Pro Max – AI-Powered Solar Planner")
-st.markdown("### Real NASA Data + LSTM AI Forecast → Accurate 25-Year Profitability")
+st.markdown("### Real NASA Data + LSTM AI Forecast ")
 
 # === INPUTS ===
 col1, col2 = st.columns(2)
@@ -46,14 +45,14 @@ for name in scenarios:
         }
 
 # === RUN ANALYSIS ===
-if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_container_width=True):
+if st.button(f"Run AI-Powered {lifespan}-Year Solar Analysis", type="primary", use_container_width=True):
     with st.spinner("Fetching NASA data & running AI forecast (takes ~10–20 sec first time)..."):
         try:
-            # This uses your model.py → returns dict with predicted_25y
-            result = predict_next_25_years(lat, lon)
+            # This uses your model.py → returns dict with predicted
+            result = predict_next_years(lat, lon,lifespan)
 
-            # Extract AI-predicted monthly GHI for next 25 years
-            predicted_years = result["predicted_25y"]  # List of 25 lists (each 12 months)
+            # Extract AI-predicted monthly GHI for next  years
+            predicted_years = result["predicted"]  # List of  lists (each 12 months)
             historical = np.array(result["historical"])
 
             # Use first predicted year as baseline (most accurate)
@@ -63,7 +62,7 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
   # kWh/m²/year
 
             st.success("AI Forecast Loaded Successfully!")
-            st.write(f"**AI Prediction**: Next 25-year average GHI: `{np.mean(predicted_years):.3f}` kWh/m²/day "
+            st.write(f"**AI Prediction**: Next {lifespan}-year average GHI: `{np.mean(predicted_years):.3f}` kWh/m²/day "
                      f"(Trend: **{result['trend_percent']:+.2f}%**)")
 
             # === Financial Calculation ===
@@ -86,14 +85,18 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
                     cashflows.append(cumulative)
 
                 payback = next((y for y, c in enumerate(cashflows) if c >= 0), None)
-                payback_str = f"{payback} years" if payback else ">25 years"
+                if payback is None:
+                    payback_str = f">{lifespan} years"
+                else:
+                    payback_str = f"{payback} years"
+
 
                 results[name] = {
                     "size": size,
                     "cost": total_cost,
                     "first_year_kwh": int(first_year_kwh),
                     "payback": payback_str,
-                    "profit_25y": int(cumulative),
+                    "profit": int(cumulative),
                     "cashflows": cashflows,
                     "color": cfg["color"]
                 }
@@ -110,14 +113,19 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
                     st.metric("Total Cost", f"₹{r['cost']:,.0f}")
                     st.metric("First Year Output", f"{r['first_year_kwh']:,} kWh")
                     st.metric("Payback Period", r['payback'])
-                    st.metric("25-Year Profit", f"₹{r['profit_25y']:,.0f}")
+                    st.metric(f"{lifespan}-Year Profit", f"₹{r['profit']:,.0f}")
 
-                    if "years" in r['payback'] and int(r['payback'].split()[0]) <= 6:
-                        st.success("MONEY PRINTER!")
-                    elif int(r['payback'].split()[0]) <= 9:
-                        st.warning("Strong Investment")
+                    if "years" in r["payback"] and r["payback"][0].isdigit():
+                        years_val = int(r["payback"].split()[0])
+                        if years_val <= 6:
+                            st.success("MONEY PRINTER!")
+                        elif years_val <= 9:
+                            st.warning("Strong Investment")
+                        else:
+                            st.info("Long-term Savings")
                     else:
                         st.info("Long-term Savings")
+
 
             # === Cash Flow Chart ===
             st.subheader("Cumulative Profit Over Time")
@@ -129,20 +137,19 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
             ax.axhline(0, color="black", linestyle="--", alpha=0.7)
             ax.set_xlabel("Years")
             ax.set_ylabel("Cumulative Profit (₹)")
-            ax.set_title("25-Year Solar Investment Cash Flow (AI Forecasted Sunlight)")
+            ax.set_title(f"{lifespan}-Year Solar Investment Cash Flow (AI Forecasted Sunlight)")
             ax.legend()
             ax.grid(True, alpha=0.3)
             st.pyplot(fig)
 
             # === Show AI Forecast Data ===
                         # === BEAUTIFUL HISTORICAL + AI FORECAST GRAPH (LIKE YOUR SCREENSHOT) ===
-            with st.expander("AI Solar Radiation Forecast – 40+ Years History + Next 25 Years", expanded=True):
+            with st.expander(f"AI Solar Radiation Forecast – 40+ Years History + Next {lifespan} Years", expanded=True):
                 st.subheader("40+ Years of NASA Data + LSTM AI Prediction")
 
                 # Extract data from model.py result
                 historical_ghi = np.array(result["historical"])           # Full history
-                predicted_ghi = np.array(result["predicted_25y"]).flatten()  # Next 60 months (5 years)
-
+                predicted_ghi = np.array(result["predicted"]).flatten()  
                 # Create the plot
                 fig, ax = plt.subplots(figsize=(16, 8))
 
@@ -152,7 +159,7 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
 
                 # AI Forecast (red, dashed)
                 future_x = np.arange(len(historical_ghi), len(historical_ghi) + len(predicted_ghi))
-                ax.plot(future_x, predicted_ghi, label="AI Forecast (2025–2050)", 
+                ax.plot(future_x, predicted_ghi, label="AI Forecast (2025–" + str(2024 + lifespan) + ")", 
                         color="#d62728", linewidth=3, linestyle="--", alpha=0.95)
 
                 # Styling — exactly like your original  
@@ -166,7 +173,7 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
                 forecast_avg = np.mean(predicted_ghi)
                 trend = (forecast_avg - last_year_avg) / last_year_avg * 100
                 stats_text = (f"Last Year Avg: {last_year_avg:.3f}\n"
-                              f"5-Year Forecast Avg: {forecast_avg:.3f}\n"
+                              f"{lifespan}-Year Forecast Avg: {forecast_avg:.3f}\n"
                               f"Trend: {trend:+.2f}%")
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=11,
                         verticalalignment='top', bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.9))
@@ -176,4 +183,3 @@ if st.button("Run AI-Powered 25-Year Solar Analysis", type="primary", use_contai
         except Exception as e:
             st.error(f"Error: {e}")
             st.info("Check your model.py is in the same folder and working.")
-
