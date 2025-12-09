@@ -168,18 +168,7 @@ if st.button(f"Run AI-Powered {lifespan}-Year Solar Analysis", type="primary", u
                 ax.legend(fontsize=12, loc="upper left")
                 ax.grid(True, alpha=0.3)
 
-                # Stats box
-                last_year_avg = np.mean(historical_ghi[-12:])
-                forecast_avg = np.mean(predicted_ghi)
-                trend = (forecast_avg - last_year_avg) / last_year_avg * 100
-                stats_text = (f"Last Year Avg: {last_year_avg:.3f}\n"
-                              f"{lifespan}-Year Forecast Avg: {forecast_avg:.3f}\n"
-                              f"Trend: {trend:+.2f}%")
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=11,
-                        verticalalignment='top', bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.9))
-
-                st.pyplot(fig)
-
         except Exception as e:
             st.error(f"Error: {e}")
             st.info("Check your model.py is in the same folder and working.")
+
